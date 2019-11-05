@@ -1,0 +1,354 @@
+---
+title: "merger_illustrations"
+author: "Joey Stanley"
+date: "4/12/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+theme_joey <- function() {
+  theme_void(base_size = 12, base_family = "Avenir") %+replace% 
+        theme(panel.background = element_blank(), 
+              plot.background = element_rect(fill = "white", colour = NA), 
+              legend.position = "none")
+}
+```
+
+I've dabbled with creating animations in R, but since the newest version of [gganimate](https://gganimate.com) came out, I've been trying to find a useful way to use it. (I don't know if [visulizing simulations of Chutes and Ladders](/blog/simulating_chutes_and_ladders) counts as "useful"…) But as I was putting together a lecture on mergers a few weeks ago, it occured to me that the best way to illustrate them would be with animations! So I took the opportunity and created some fun visuals.
+
+## Using gganimate
+
+As it turns out, gganimate is awesome! I mean all you need to do is add literally one line of code to your plot and it animates it! I find it easiest to think of the data in movie frames. When I group things by frame, gganimate will take care of the rest for me.
+
+The tricky part is creating the underlying dataset. Let's say I want to illustrate a merger with 50 hypothetical datapoints from vowel A and 50 from vowel B---that's 100 data points total. If I've got an animation of in mind that has 15 different frames, I'm going to need a dataframe with 1500 rows in it. And when the data is all artificial, it gets tricky to create all those carefully.
+
+So, this is not a tutorial because my code was awful, hacky, clunky, etc. It's on [my Github](https://github.com/JoeyStanley) reproducibility and stuff but I won't talk about it much here because detracts from what I really wanted to show: the animations.
+
+```{r}
+library(tidyverse)
+library(gganimate)
+```
+
+Since I need to specify how many vowel tokens I want, I'll save that as a variable here. 
+
+```{r}
+n <- 50
+```
+
+## Merger by Approximation
+
+I'll start with a merger by approximation because it's the most straightforward. One vowel class gradually moves closer to another. In some cases the final vowel is somewhere between the two historic vowel classes, but I'll demonstrate the case where one vowel stays put and the other vowel shfits to join it.
+
+First, I'll create a function that creates the exact same pair of multivariate normally distributed data, with the distance between them controlled by the user. The vowel on the right is the same regardless, but the left vowel's position along the *x*-axis changes. Because I want this animation to progress linearly, the position along the *x*-axis will also serve nicely as the time variable in the animation.
+
+```{r}
+# Come up with a function that creates the data
+create_x <- function(t) {
+  
+  # To ensure the data is the same each time.
+  set.seed(4)
+
+  # Vowel A is on the left
+  vowel_a <- tibble(vowel = "A",
+                 id = 1:n,
+                 x = rnorm(n, t, 1),
+                 y = rnorm(n, 0, 1))
+
+  # Vowel B is on the right
+  vowel_b <- tibble(vowel = "B",
+                  id = 1:n,
+                  x = rnorm(n, 3, 1),
+                  y = rnorm(n, 0, 1))
+
+  # Combine A and B into a single data frame
+  bind_rows(vowel_a, vowel_b)
+}
+```
+
+So I'll take the numbers, -3, 2, 3, and 3, creating four similar versions of the data. The -3 and 2 will move the A vowel to the right. Between 2 and 3, it'll change to colors. Combine all those datasets into one. At the very end, I'll create a new column called `state`: if the dataset is at its final state (time and *x* = 3), I'll consider the two vowels "merged", otherwise the two are just "A" and "B". I'll repeat This will be used for color in the visuals. Finally, I'll repeat the last state and change its time to 4 so that it pauses on the final state for a second. 
+
+```{r}
+by_approx <- tibble(t = c(-3, -1, 1, 2, 3)) %>%
+    mutate(x = map(t, create_x)) %>%
+    unnest() %>%
+    mutate(state = ifelse(t == 3, "merged", vowel)) %>%
+    print()
+```
+
+Here's what each of these states look like as static plots
+
+```{r, fig.height = 12, fig.width = 5}
+ggplot(by_approx, aes(x, y, color = state, label = vowel)) + 
+  geom_text() + 
+  scale_color_manual(values = c("#4477AA", "#CC3311", "#762A83")) + 
+  scale_fill_manual(values = c("#4477AA", "#CC3311", "#762A83")) + 
+  facet_wrap(~t, ncol = 1) + 
+  theme_joey() +
+  ggsave("approx_stages.jpeg", height = 12, width = 5, dpi = 300)
+```
+
+So, with just one additional line of code (`transition_time`), it animates them by filling in the gaps. 
+
+```{r}
+by_approx_anim <- ggplot(by_approx, aes(x, y, color = state, label = vowel, group = id)) + 
+  geom_text() + 
+  scale_x_continuous(limits = c(-5, 5)) + scale_y_continuous(limits = c(-2.5, 2.5)) +
+  scale_color_manual(values = c("#4477AA", "#CC3311", "#762A83")) + 
+  scale_fill_manual(values = c("#4477AA", "#CC3311", "#762A83")) + 
+  theme_joey() +
+  labs(title = "Merger by Approximation (Trudgill & Foxcroft 1978)",
+       subtitle = "Based on 100 randomly generated data points",
+       caption = "joeystanley.com") + 
+  transition_time(t)
+```
+
+```{r}
+anim_save("approximation.gif", by_approx_anim, 
+          duration = 5, fps = 30,
+          start_pause = 30, end_pause = 30,
+          # arguments set to the device
+          height = 1250, width = 2500, res = 300) # <- `res` instead of `dpi`
+```
+
+So that's the merger by approximation. 
+
+## Merger by Transfer
+
+```{r}
+# For reproducibility
+set.seed(4)
+# How many vowels per vowel class?
+n <- 50
+
+# Start with 
+transfer_animate <- tibble(vowel = "A",
+                      id = 1:n,
+                      x_before = rnorm(n, -3, 1),
+                      x_after = x_before + 6,
+                      y = rnorm(n, 0, 1))
+b_vowel <- tibble(vowel = "B",
+                  id = 1:n * -1,
+                  x = rnorm(n, 3, 1),
+                  y = rnorm(n, 0, 1))
+first_state <- transfer_animate %>%
+  rename(x = x_before) %>%
+  select(-x_after) %>%
+  bind_rows(b_vowel) %>%
+  mutate(shift_time = -4,
+         state = vowel)
+
+create_intermediate_steps <- function(t) {
+  b <- b_vowel %>%
+    add_column(shift_time = t)
+  
+  transfer_animate %>%
+    left_join(shift_times, by = "id") %>%
+    mutate(x = if_else(t >= shift_time, x_after, x_before)) %>%
+    select(-shift_time, -x_before, -x_after) %>%
+    bind_rows(b) %>%
+    return()
+}
+
+shift_times <- tibble(id = 1:n) %>%
+  mutate(shift_time = rnorm(nrow(.), 0, 1)) 
+
+transfer_animate <- shift_times %>%
+  select(-id) %>%
+  mutate(new = map(shift_time, create_intermediate_steps)) %>%
+  unnest() %>%
+  mutate(state = ifelse(shift_time == max(shift_time), "merged", vowel)) %>%
+  select(-shift_time1) %>%
+  print()
+last_state <- transfer_animate %>%
+  filter(shift_time == max(shift_time)) %>%
+  mutate(shift_time = shift_time + 3)
+transfer_animate <- bind_rows(first_state, transfer_animate, last_state)
+```
+
+
+```{r}
+by_transfer_anim <- ggplot(transfer_animate, aes(x, y, color = state, label = vowel, group = id)) + 
+  geom_text() + 
+  # stat_ellipse(aes(fill = vowel, group = state), alpha = 0.05, geom = "polygon") +
+  scale_color_manual(values = c("#4477AA", "#CC3311", "#762A83")) +
+  # scale_fill_manual(values = c("#4477AA", "#CC3311", "#762A83")) +
+  theme_joey() +
+  labs(title = "Merger by Transfer (Foxcroft & Trudgill 1978)",
+       subtitle = "Based on 100 randomly generated data points",
+       caption = "joeystanley.com") + 
+  transition_time(shift_time) +
+  # transition_states(time, state_length = c(rep(0, 50), 3), wrap = FALSE) +
+  ease_aes('cubic-in-out')
+```
+
+
+```{r}
+anim_save("transfer.gif", by_transfer_anim, 
+          duration = 5, fps = 30,
+          start_pause = 30, end_pause = 30,
+          # arguments set to the device
+          height = 1250, width = 2500, res = 300) # <- `res` instead of `dpi`
+```
+
+
+
+
+
+
+
+
+
+
+## Merger by phonological transfer
+
+```{r}
+n <- 50
+group_size <- n/5
+set.seed(4)
+b_group <- tibble(id = rep(100 + 1:n),
+                  vowel = "B",
+                  x =  c(rnorm(n, 3, 1)),
+                  y =  c(rnorm(n, 0, 1))) %>%
+  bind_rows(., ., ., ., ., ., ., ., ., ., ., ., ., ., .) %>%
+  mutate(t = rep(1:15, each = n)) %>%
+  print()
+
+get_three_stages_x <- function(group_size) { 
+  initial <-rnorm(group_size, -3, 1)
+  middle <- (scale(initial) / 3) - 1.5
+  end <- initial + 6
+  return(c(initial, middle, end))
+}
+get_three_stages_y <- function(group_size) {
+  initial <-rnorm(group_size, 0, 1)
+  middle <- initial
+  end <- initial
+  return(c(initial, middle, end))
+}
+
+create_group <- function(t = 1:3, ids = 1:10) {
+  
+  all_three <- tibble(id = rep(ids, 3),
+                      vowel = rep("A", group_size * 3),
+                      t = rep(t, each = group_size),
+                      x = get_three_stages_x(group_size),
+                      y = get_three_stages_y(group_size))
+  
+  before <- all_three %>%
+    filter(t == min(t)) %>%
+    select(-t)
+  middle <- all_three %>%
+    filter(t == median(t))
+  after <- all_three %>%
+    filter(t == max(t)) %>%
+    select(-t)
+  
+  n_befores <- length(1:min(t))
+  befores <- map_df(seq_len(n_befores), ~before) %>%
+    mutate(t = rep(1:n_befores, each = group_size))
+  
+  
+  n_afters <- length(max(t):15)
+  afters <- map_df(seq_len(n_afters), ~after) %>%
+    mutate(t = rep(max(t):15, each = group_size))
+  
+  return(bind_rows(befores, middle, afters))
+}
+
+g1 <- create_group(1:3) %>%
+  print()
+ggplot(g1, aes(x, y, color = vowel)) + 
+  geom_point() + 
+  facet_wrap(~t)
+
+phon_trans <- bind_rows(create_group( 1:3,   1:10), 
+                        create_group( 4:6,  11:20),
+                        create_group( 7:9,  21:30),
+                        create_group(10:12, 31:40),
+                        create_group(13:15, 41:50),
+                        b_group) %>%
+  mutate(state = ifelse(t == 15, "merged", vowel))
+```
+
+
+```{r}
+phon_trans_anim <- ggplot(phon_trans, aes(x, y, color = state, label = vowel, group = id)) + 
+  geom_text() + 
+  # stat_ellipse(aes(fill = vowel, group = state), alpha = 0.05, geom = "polygon") +
+  scale_color_manual(values = c("#4477AA", "#CC3311", "#762A83")) +
+  # scale_fill_manual(values = c("#4477AA", "#CC3311", "#762A83")) +
+  coord_fixed(ratio = 1) +
+  theme_joey() + 
+  labs(title = "Merger by Phonological Transfer (Dinkin 2016)",
+       subtitle = "Based on 100 randomly generated data points",
+       caption = "joeystanley.com") + 
+  theme(legend.position = "none") + 
+  transition_time(t) + 
+  # transition_states(time, state_length = c(rep(0, 50), 3), wrap = FALSE) +
+  ease_aes('cubic-in-out')
+
+anim_save("phon_transfer.gif", phon_trans_anim, 
+          duration = 7, fps = 30,
+          start_pause = 30, end_pause = 30,
+          # arguments set to the device
+          height = 1250, width = 2500, res = 300) # <- `res` instead of `dpi`
+```
+
+
+
+
+
+
+
+
+## Merger by Expansion
+
+```{r}
+n <- 50
+set.seed(4)
+a <- tibble(id = 1:n,
+            vowel = rep("A", n),
+            x = rnorm(n, mean = -3, sd = 1),
+            y = rnorm(n, mean = 0,  sd = 1))
+b <- tibble(id = 1:n,
+            vowel = rep("B", n),
+            x = rnorm(n, mean = 3,  sd = 1),
+            y = rnorm(n, mean = 0,  sd = 1))
+before <- bind_rows(a, b)
+a <- tibble(id = 1:n,
+            vowel = rep("A", n),
+            x = rnorm(n, mean = 0, sd = 2),
+            y = rnorm(n, mean = 0,  sd = 1))
+b <- tibble(id = 1:n,
+            vowel = rep("B", n),
+            x = rnorm(n, mean = 0,  sd = 2),
+            y = rnorm(n, mean = 0,  sd = 1))
+after <- bind_rows(a, b)
+
+expansion_animate <- bind_rows(before, before, after, after) %>%
+  mutate(t = c(rep(1, n*2), rep(4, n*2), rep(7, n*2), rep(10, n*2))) %>%
+  mutate(state = ifelse(t > 5, "merged", vowel))
+```
+
+
+```{r}
+expan_anim <- ggplot(expansion_animate, aes(x, y, color = state, label = vowel, group = id)) + 
+  geom_text() + 
+  # stat_ellipse(aes(fill = vowel, group = state), alpha = 0.05, geom = "polygon") +
+  scale_color_manual(values = c("#4477AA", "#CC3311", "#762A83")) +
+  # scale_fill_manual(values = c("#4477AA", "#CC3311", "#762A83")) +
+  coord_fixed(ratio = 1) +
+  labs(title = "Merger by Expansion (Herold 1990)",
+       subtitle = "Based on 100 randomly generated data points",
+       caption = "joeystanley.com") + 
+  theme_joey() + 
+  theme(legend.position = "none") + 
+  transition_time(t) +
+  ease_aes('cubic-in-out')
+anim_save("expansion.gif", expan_anim, 
+          duration = 4, fps = 30,
+          start_pause = 30, end_pause = 30,
+          # arguments set to the device
+          height = 1250, width = 2500, res = 300) # <- `res` instead of `dpi`
+```
